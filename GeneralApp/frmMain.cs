@@ -160,8 +160,8 @@ namespace BAFL_Campaign_App
                         string otp = _Msg.Replace(" ", "");
 
                         // 1st Service: Message is purely numbers -> Send OTP to Gateway
-                        if (!string.IsNullOrEmpty(otp) && IsNumeric(otp))
-                        {
+                        if (!string.IsNullOrEmpty(otp) && IsNumeric(otp) && (otp.Length == 4 || otp.Length == 8))
+                            {
                             SendBAFLOtpToGateway(_Mobile, otp, _Telco, _Msg);
                         }
                         else if (_Msg.ToUpper().Replace(" ", "") == "MNP")
@@ -218,8 +218,10 @@ namespace BAFL_Campaign_App
                                     ShowActivity(ActivityType.AddTransactionList, $"BAPULL Static Handled [{_Mobile}]. Response for prefix: {matchedActivity}");
                                     CreateLog($"[BAPULL STATIC] Mobile: {_Mobile} | Activity: {matchedActivity} | Queued MT: {staticResponse}", "BAPULL_LOG", AppConfig.LogPath);
 
+                                    int smsPage = GetSmsPageCount(staticResponse); // Defined here before log calls
+
                                     InsertMTMessage(_MsgId, _Mobile, _Msg, staticResponse, _Telco, _SCode);
-                                    InsertBapullDbLog(_Mobile, _MsgId, fullMessage, matchedActivity, staticCode, staticResponse, _Telco, _SCode);
+                                    InsertBapullDbLog(_Mobile, _MsgId, fullMessage, matchedActivity, staticCode, staticResponse, _Telco, _SCode, smsPage);
                                 }
                                 else
                                 {
@@ -382,10 +384,20 @@ namespace BAFL_Campaign_App
                         objDAL.doExecute(Sql, _AppConfig.MonConnectionString);
                     }
 
+                    //SendMsg = "Thank you for your message.\nDate: " + DateTime.Now.ToString("dd-MMM-yyyy").ToUpper() + "\nTime: " + DateTime.Now.ToString("HH:mm:ss").ToUpper() + "\nYour Operator: " + _Telco;
+
+                    //Sql = " insert into MSG_DB..Campaign_MNP (aDate, SCode, Telco, Mobile, Message, Keyword, SMS, pTelco, cTelco) values " +
+                    //    "(getdate(), '" + _SCode + "', '" + _Telco + "','" + _Mobile + "','" + _Msg + "','MNP', '" + SendMsg + "','" + xTelco + "','" + _Telco + "') ";
+                    //objDAL.doExecute(Sql, _AppConfig.MonConnectionString);
+
                     SendMsg = "Thank you for your message.\nDate: " + DateTime.Now.ToString("dd-MMM-yyyy").ToUpper() + "\nTime: " + DateTime.Now.ToString("HH:mm:ss").ToUpper() + "\nYour Operator: " + _Telco;
 
+                    // Escape single quotes for SQL inline queries
+                    string safeSendMsg = SendMsg.Replace("'", "''");
+                    string safeMsg = _Msg.Replace("'", "''");
+
                     Sql = " insert into MSG_DB..Campaign_MNP (aDate, SCode, Telco, Mobile, Message, Keyword, SMS, pTelco, cTelco) values " +
-                        "(getdate(), '" + _SCode + "', '" + _Telco + "','" + _Mobile + "','" + _Msg + "','MNP', '" + SendMsg + "','" + xTelco + "','" + _Telco + "') ";
+                        "(getdate(), '" + _SCode + "', '" + _Telco + "','" + _Mobile + "','" + safeMsg + "','MNP', '" + safeSendMsg + "','" + xTelco + "','" + _Telco + "') ";
                     objDAL.doExecute(Sql, _AppConfig.MonConnectionString);
 
                     Sql = " exec sp_SendMOMT  '" + _MsgId + "', '" + _Mobile + "', '" + _Msg + "', '" + SendMsg + "', '10', '" + _SCode + "', '" + _Mask + "', '" + _MtTable + "', '" + _Telco + "' ";
@@ -439,13 +451,11 @@ namespace BAFL_Campaign_App
 
         private void SendBapullToGateway(string mobileNo, string activity, string accountData, string field1, string field2, string msgId, string originalMsg, string telco, string shortCode)
         {
-            
+            int smsPage = 0; // Declared outside try/catch so it's in scope everywhere
+
             try
             {
-                //string soapEndpoint = "http://xxx.xxx.xxx.xx:Port/PullSMSService?wsdl";
-                //string soapEndpoint = "http://192.168.186.76:7802/PullSMSService?wsdl";
-                //string soapEndpoint = "http://192.168.186.85:7803/PullSMSService?wsdl";
-
+                
                 string soapEndpoint = AppConfig.PullServiceUrl;
                 string safeOriginalMsg = System.Security.SecurityElement.Escape(originalMsg ?? string.Empty);
 
@@ -512,6 +522,8 @@ namespace BAFL_Campaign_App
                             gatewayMessage = gatewayMessage.Replace("<", "").Replace(">", "").Replace("'", "").Replace("\"", "").Replace("`", "").Replace("`", "").Trim();
                         }
 
+                        smsPage = GetSmsPageCount(gatewayMessage);
+
                         ShowActivity(ActivityType.AddTransactionList, $"BAPULL Sent [{mobileNo}]. Response: {gatewayCode} - {gatewayMessage}");
 
                         if (!string.IsNullOrEmpty(gatewayMessage))
@@ -524,7 +536,7 @@ namespace BAFL_Campaign_App
                             CreateLog($"[BAPULL FAIL] No Resp_Desc found. Raw XML: {soapResult}", "BAPULL_LOG", AppConfig.LogPath);
                         }
 
-                        InsertBapullDbLog(mobileNo, msgId, originalMsg, activity, gatewayCode, gatewayMessage, telco, shortCode);
+                        InsertBapullDbLog(mobileNo, msgId, originalMsg, activity, gatewayCode, gatewayMessage, telco, shortCode, smsPage);
                     }
                 }
             }
@@ -534,11 +546,23 @@ namespace BAFL_Campaign_App
                 CreateLog(string.Format("[SendBapullToGateway Error]: {0}", ex.Message), "BAPULL_LOG", AppConfig.LogPath);
 
                 // --- NEW: LOG EXCEPTIONS TO THE DATABASE TOO ---
-                InsertBapullDbLog(mobileNo, msgId, originalMsg, activity, "ERR", $"ERROR: {ex.Message}", telco, shortCode);
+                InsertBapullDbLog(mobileNo, msgId, originalMsg, activity, "ERR", $"ERROR: {ex.Message}", telco, shortCode, smsPage);
             }
         }
 
-        
+        private int GetSmsPageCount(string message)
+        {
+            if (string.IsNullOrEmpty(message))
+                return 0;
+
+            int length = message.Length;
+
+            if (length <= 160)
+                return 1;
+
+            return (int)Math.Ceiling((double)length / 153);
+        }
+
         private void InsertMTMessage(string msgId, string mobile, string originalMsg, string smsText, string telco, string shortCode)
         {
             try
@@ -602,7 +626,7 @@ namespace BAFL_Campaign_App
             }
         }
 
-        private void InsertBapullDbLog(string mobileNo, string msgId, string userMessage, string activityMatched, string gatewayCode, string extractedMessage, string telco, string shortCode)
+        private void InsertBapullDbLog(string mobileNo, string msgId, string userMessage, string activityMatched, string gatewayCode, string extractedMessage, string telco, string shortCode, int smsPage)
         {
             try
             {
@@ -610,9 +634,9 @@ namespace BAFL_Campaign_App
                 {
                     // Removed GatewayResponse, added GatewayCode
                     string sql = @"INSERT INTO BAFLDB..tblBapull_Logs 
-                           (MobileNo, MsgID, UserMessage, Activity, GatewayCode, ResponceMessage, Telco, ShortCode) 
+                           (MobileNo, MsgID, UserMessage, Activity, GatewayCode, ResponceMessage, Telco, ShortCode, SMSPage) 
                            VALUES 
-                           (@MobileNo, @MsgID, @UserMessage, @Activity, @GatewayCode, @ResponceMessage, @Telco, @ShortCode)";
+                           (@MobileNo, @MsgID, @UserMessage, @Activity, @GatewayCode, @ResponceMessage, @Telco, @ShortCode, @SMSPage)";
 
                     using (System.Data.SqlClient.SqlCommand cmd = new System.Data.SqlClient.SqlCommand(sql, conn))
                     {
@@ -624,6 +648,7 @@ namespace BAFL_Campaign_App
                         cmd.Parameters.AddWithValue("@ResponceMessage", extractedMessage ?? (object)DBNull.Value);
                         cmd.Parameters.AddWithValue("@Telco", telco ?? (object)DBNull.Value);
                         cmd.Parameters.AddWithValue("@ShortCode", shortCode ?? (object)DBNull.Value);
+                        cmd.Parameters.AddWithValue("@SMSPage", smsPage);
 
                         conn.Open();
                         cmd.ExecuteNonQuery();
@@ -757,8 +782,9 @@ namespace BAFL_Campaign_App
 
                 string responseCode = string.Empty;
 
-                
-                    sCommand.CommandType = CommandType.StoredProcedure;
+                _Msg = _Msg.Replace("'", " ");
+
+                sCommand.CommandType = CommandType.StoredProcedure;
                     sCommand.CommandText = "TelloCast..sp_setup2WayCampaign";
                     sCommand.Parameters.Clear();
 
@@ -834,7 +860,7 @@ namespace BAFL_Campaign_App
             }
             catch (Exception ex)
             {
-                ShowActivity(ActivityType.AddErrirList, string.Format("[StartProcessHBL_Campaign]: {0}", ex.Message));
+                ShowActivity(ActivityType.AddErrirList, string.Format("[StartProcessBAFL_Campaign]: {0}", ex.Message));
                 CreateLog(string.Format("[StartProcessBAFL_Campaign]: {0}", ex.Message), "HBLSMSMO", AppConfig.LogPath);
             }
         }
