@@ -72,9 +72,6 @@ namespace BAFL_Campaign_App
 
         private void tmrProcess_Tick(object sender, EventArgs e)
         {
-            //ProcessShell_V3();
-            //ProcessCCF();
-
             if (ThreadProcessBAFL.IsAlive == false)
             {
                 ThreadProcessBAFL = new Thread(ProcessBAFL);
@@ -100,19 +97,13 @@ namespace BAFL_Campaign_App
 
             try
             {
-                Sql = "select top " + AppConfig.TopRecord + " id, sender, telco, msgid, msg, SCode, convert(varchar, format(adate, 'dd-MMM-yyyy hh:mm:ss tt'))  as msgDate " +
-                        " from BAFLDB..tblIncoming";
+                Sql = "select top " + AppConfig.TopRecord + " id, sender, telco, msgid, msg, SCode, convert(varchar, format(adate, 'dd-MMM-yyyy hh:mm:ss tt')) as msgDate " +
+                        " from BAFLDB..tblIncoming WHERE Error IS NULL OR Error = ''";
                 dt = objDAL.doSelect(Sql, _AppConfig.AppConnectionString);
 
                 foreach (DataRow MORow in dt.Rows)
                 {
-                    _ID = "";
-                    _Mobile = "";
-                    _Telco = "";
-                    _MsgId = "";
-                    _Msg = "";
-                    _SCode = "";
-                    _msgDate = string.Empty;
+                    _sResponse = "0"; 
 
                     _ID = MORow["id"].ToString();
                     _Mobile = MORow["sender"].ToString();
@@ -122,34 +113,17 @@ namespace BAFL_Campaign_App
                     _SCode = MORow["SCode"].ToString();
                     _msgDate = MORow["msgDate"].ToString();
 
-                    _Mobile = _Mobile.Replace("+", "");
-                    _Mobile = _Mobile.Replace("-", "");
-                    _Mobile = _Mobile.Trim();
+                    _Mobile = _Mobile.Replace("+", "").Replace("-", "").Trim();
 
-                    _Msg = _Msg.Replace("'", " ");
-                    _Msg = _Msg.Replace("[", " ");
-                    _Msg = _Msg.Replace("]", " ");
-                    _Msg = _Msg.Replace("{", " ");
-                    _Msg = _Msg.Replace("}", " ");
-                    _Msg = _Msg.Replace("(", " ");
-                    _Msg = _Msg.Replace(")", " ");
-                    _Msg = _Msg.Replace("<", " ");
-                    _Msg = _Msg.Replace(">", " ");
-                    _Msg = _Msg.Replace(".", " ");
-                    _Msg = _Msg.Replace(",", " ");
-                    _Msg = _Msg.Replace("-", " ");
-                    _Msg = _Msg.Replace("_", " ");
-                    _Msg = _Msg.Replace("&", " ");
-                    _Msg = _Msg.Replace("*", " ");
-                    _Msg = _Msg.Replace("=", " ");
-                    _Msg = _Msg.Replace("!", " ");
-                    _Msg = _Msg.Replace("#", " ");
-                    _Msg = _Msg.Replace("@", " ");
-                    _Msg = _Msg.Replace("$", " ");
-                    _Msg = _Msg.Replace("%", " ");
-                    _Msg = _Msg.Replace(Convert.ToString((char)34), " ");
-                    _Msg = _Msg.ToLower();
-                    _Msg = _Msg.Trim();
+                    _Msg = _Msg.Replace("'", " ").Replace("[", " ").Replace("]", " ")
+                               .Replace("{", " ").Replace("}", " ").Replace("(", " ")
+                               .Replace(")", " ").Replace("<", " ").Replace(">", " ")
+                               .Replace(".", " ").Replace(",", " ").Replace("-", " ")
+                               .Replace("_", " ").Replace("&", " ").Replace("*", " ")
+                               .Replace("=", " ").Replace("!", " ").Replace("#", " ")
+                               .Replace("@", " ").Replace("$", " ").Replace("%", " ")
+                               .Replace(Convert.ToString((char)34), " ")
+                               .ToLower().Trim();
 
                     ShowActivity(ActivityType.AddTransactionList, string.Format("Mobile No  : {0}", _Mobile));
                     ShowActivity(ActivityType.AddTransactionList, string.Format("Short Code : {0}", _SCode));
@@ -159,22 +133,19 @@ namespace BAFL_Campaign_App
                     {
                         string otp = _Msg.Replace(" ", "");
 
-                        // 1st Service: Message is purely numbers -> Send OTP to Gateway
                         if (!string.IsNullOrEmpty(otp) && IsNumeric(otp) && (otp.Length == 4 || otp.Length == 8))
-                            {
-                            SendBAFLOtpToGateway(_Mobile, otp, _Telco, _Msg);
+                        {
+                            bool success = SendBAFLOtpToGateway(_ID, _Mobile, otp, _Telco, _Msg);
+                            if (!success) _sResponse = "1";
                         }
                         else if (_Msg.ToUpper().Replace(" ", "") == "MNP")
                         {
                             StartProcessMNP(_Mobile, _Msg, _MsgId, _Telco, _SCode, _AppConfig);
                         }
-
-                        // 2nd Service: Non-numeric message -> Process prefix inquiry (BAPULL logic without prefix requirement)
                         else
                         {
                             string fullMessage = _Msg.Trim().ToLower();
 
-                            // Order prefixes from LONGEST to SHORTEST
                             string[] prefixes = new string[] {
                                 "internet off", "internet on", "alfa block", "dc block",
                                 "cchelp", "ccbpr", "ccbps", "raast", "orbits",
@@ -185,7 +156,6 @@ namespace BAFL_Campaign_App
                             string matchedActivity = string.Empty;
                             string matchedAccount = string.Empty;
 
-                            // Extract the first word to test exact keyword matching
                             string[] messageWords = fullMessage.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                             string firstWord = messageWords.Length > 0 ? messageWords[0] : fullMessage;
 
@@ -206,7 +176,7 @@ namespace BAFL_Campaign_App
 
                                 if (prIndex != -1)
                                 {
-                                    matchedAccount = fullMessage.Substring(prIndex + 1);    // "15 09 2017"
+                                    matchedAccount = fullMessage.Substring(prIndex + 1);
                                 }
 
                                 string staticResponse = GetStaticResponseFromDb(matchedActivity);
@@ -218,7 +188,7 @@ namespace BAFL_Campaign_App
                                     ShowActivity(ActivityType.AddTransactionList, $"BAPULL Static Handled [{_Mobile}]. Response for prefix: {matchedActivity}");
                                     CreateLog($"[BAPULL STATIC] Mobile: {_Mobile} | Activity: {matchedActivity} | Queued MT: {staticResponse}", "BAPULL_LOG", AppConfig.LogPath);
 
-                                    int smsPage = GetSmsPageCount(staticResponse); // Defined here before log calls
+                                    int smsPage = GetSmsPageCount(staticResponse);
 
                                     InsertMTMessage(_MsgId, _Mobile, _Msg, staticResponse, _Telco, _SCode);
                                     InsertBapullDbLog(_Mobile, _MsgId, fullMessage, matchedActivity, staticCode, staticResponse, _Telco, _SCode, smsPage);
@@ -232,66 +202,39 @@ namespace BAFL_Campaign_App
                                     if (matchedActivity == "cu")
                                     {
                                         int cuIndex = matchedAccount.IndexOf(' ');
-
                                         if (cuIndex != -1)
                                         {
-                                            _acount = matchedAccount.Substring(0, cuIndex);      // "4210130414633"
-                                            _field1 = matchedAccount.Substring(cuIndex + 1);    // "15 09 2017"
-                                            _field1 = _field1.Replace(" ", "/"); // Remove spaces from field1
+                                            _acount = matchedAccount.Substring(0, cuIndex);
+                                            _field1 = matchedAccount.Substring(cuIndex + 1).Replace(" ", "/");
                                         }
                                     }
-                                    else if (matchedActivity == "ccbpr")
+                                    else if (matchedActivity == "ccbpr" || matchedActivity == "bpr")
                                     {
                                         string[] parts = matchedAccount.Split(' ');
                                         if (parts.Length == 3)
                                         {
-                                            _field1 = parts[0];              // "u"
-                                            _field2 = parts[1];      // 200
-                                            _acount = parts[2];      // 6368
+                                            _field1 = parts[0];
+                                            _field2 = parts[1];
+                                            _acount = parts[2];
                                         }
                                     }
-                                    else if (matchedActivity == "bpr")
-                                    {
-                                        string[] parts = matchedAccount.Split(' ');
-                                        if (parts.Length == 3)
-                                        {
-                                            _field1 = parts[0];              // "u"
-                                            _field2 = parts[1];      // 200
-                                            _acount = parts[2];      // 6368
-                                        }
-                                    }
-                                    else if (matchedActivity == "bps")
+                                    else if (matchedActivity == "bps" || matchedActivity == "ccbps")
                                     {
                                         string[] parts = matchedAccount.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-
-                                        _acount = null; // Account number is set to null for BPS
-
+                                        _acount = null;
                                         if (parts.Length >= 2)
                                         {
-                                            _field1 = parts[0]; // First word after activity
-                                            _field2 = parts[1]; // Second word after activity
-                                        }
-                                    }
-                                    else if (matchedActivity == "ccbps")
-                                    {
-                                        string[] parts = matchedAccount.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-
-                                        _acount = null; // Account number is set to null for BPS
-
-                                        if (parts.Length >= 2)
-                                        {
-                                            _field1 = parts[0]; // First word after activity
-                                            _field2 = parts[1]; // Second word after activity
+                                            _field1 = parts[0];
+                                            _field2 = parts[1];
                                         }
                                     }
                                     else if (matchedActivity == "chq")
                                     {
                                         int cuIndex = matchedAccount.IndexOf(' ');
-
                                         if (cuIndex != -1)
                                         {
-                                            _field1 = matchedAccount.Substring(0, cuIndex);      // "4210130414633"
-                                            _acount = matchedAccount.Substring(cuIndex + 1);    // "15 09 2017"
+                                            _field1 = matchedAccount.Substring(0, cuIndex);
+                                            _acount = matchedAccount.Substring(cuIndex + 1);
                                         }
                                     }
                                     else if (matchedActivity == "internet off")
@@ -307,11 +250,10 @@ namespace BAFL_Campaign_App
                                         _field1 = "on";
                                     }
 
-                                    // Proceed with normal API gateway call
-                                    SendBapullToGateway(_Mobile, matchedActivity, _acount, _field1, _field2, _MsgId, fullMessage, _Telco, _SCode);
+                                    bool success = SendBapullToGateway(_ID, _Mobile, matchedActivity, _acount, _field1, _field2, _MsgId, fullMessage, _Telco, _SCode);
+                                    if (!success) _sResponse = "1";
                                 }
                             }
-
                             else
                             {
                                 StartProcessBAFL_Campaign(_Mobile, _Msg, _MsgId, _Telco, _SCode, _AppConfig);
@@ -330,7 +272,7 @@ namespace BAFL_Campaign_App
                         }
                     }
 
-                        if (_sResponse == "0")
+                    if (_sResponse == "0")
                     {
                         Sql = "Delete from BAFLDB..tblIncoming WHERE ID = '" + _ID + "' ";
                         objDAL.doExecute(Sql, _AppConfig.AppConnectionString);
@@ -347,6 +289,21 @@ namespace BAFL_Campaign_App
             }
         }
 
+        private void UpdateIncomingError(string id, string errorMessage)
+        {
+            try
+            {
+                DAL objDAL = new DAL();
+                Configuration _AppConfig = new Configuration();
+                string safeError = errorMessage.Replace("'", "''");
+                string sql = $"UPDATE BAFLDB..tblIncoming SET Error = '{safeError}' WHERE id = '{id}'";
+                objDAL.doExecute(sql, _AppConfig.AppConnectionString);
+            }
+            catch (Exception ex)
+            {
+                CreateLog($"[UpdateIncomingError Error]: {ex.Message}", "BAPULL_LOG", AppConfig.LogPath);
+            }
+        }
 
         private void StartProcessMNP(string _Mobile, string _Msg, string _MsgId, string _Telco, string _SCode, Configuration _AppConfig)
         {
@@ -422,7 +379,6 @@ namespace BAFL_Campaign_App
 
             try
             {
-                // Replace AppConfig.ConnectionString with your actual connection string variable
                 using (System.Data.SqlClient.SqlConnection conn = new System.Data.SqlClient.SqlConnection(AppConfig.AppConnectionString))
                 {
                     string query = "SELECT ResponseMessage FROM BAFLDB..BapullStaticResponses WHERE LOWER(Prefix) = LOWER(@Prefix) AND IsActive = 1";
@@ -449,15 +405,13 @@ namespace BAFL_Campaign_App
             return responseMessage;
         }
 
-        private void SendBapullToGateway(string mobileNo, string activity, string accountData, string field1, string field2, string msgId, string originalMsg, string telco, string shortCode)
+        private bool SendBapullToGateway(string id, string mobileNo, string activity, string accountData, string field1, string field2, string msgId, string originalMsg, string telco, string shortCode)
         {
-            int smsPage = 0; // Declared outside try/catch so it's in scope everywhere
+            int smsPage = 0;
 
             try
             {
-                
                 string soapEndpoint = AppConfig.PullServiceUrl;
-                string safeOriginalMsg = System.Security.SecurityElement.Escape(originalMsg ?? string.Empty);
 
                 string soapEnvelope = $@"<soapenv:Envelope xmlns:soapenv=""http://schemas.xmlsoap.org/soap/envelope/"" xmlns:pul=""http://PullSMSService"">
                    <soapenv:Header/>
@@ -471,9 +425,6 @@ namespace BAFL_Campaign_App
                       </pul:BAFInquiry>
                    </soapenv:Body>
                 </soapenv:Envelope>";
-
-                //CreateLog($"[BAPULL REQUEST XML] Mobile: {mobileNo} | Request Payload:\n{soapEnvelope}", "BAPULL_LOG", AppConfig.LogPath);
-
 
                 System.Net.HttpWebRequest request = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(soapEndpoint);
                 request.Headers.Add("SOAPAction", "\"BAF Inquiry\"");
@@ -491,7 +442,6 @@ namespace BAFL_Campaign_App
                     using (System.IO.StreamReader rd = new System.IO.StreamReader(response.GetResponseStream()))
                     {
                         string soapResult = rd.ReadToEnd();
-
                         string gatewayMessage = string.Empty;
                         string gatewayCode = string.Empty;
 
@@ -501,16 +451,10 @@ namespace BAFL_Campaign_App
                             xmlDoc.LoadXml(soapResult);
 
                             System.Xml.XmlNodeList codeNodes = xmlDoc.GetElementsByTagName("Resp_CD");
-                            if (codeNodes.Count > 0)
-                            {
-                                gatewayCode = codeNodes[0].InnerText;
-                            }
+                            if (codeNodes.Count > 0) gatewayCode = codeNodes[0].InnerText;
 
                             System.Xml.XmlNodeList descNodes = xmlDoc.GetElementsByTagName("Resp_Desc");
-                            if (descNodes.Count > 0)
-                            {
-                                gatewayMessage = descNodes[0].InnerText;
-                            }
+                            if (descNodes.Count > 0) gatewayMessage = descNodes[0].InnerText;
                         }
                         catch (Exception xmlEx)
                         {
@@ -519,11 +463,10 @@ namespace BAFL_Campaign_App
 
                         if (!string.IsNullOrEmpty(gatewayMessage))
                         {
-                            gatewayMessage = gatewayMessage.Replace("<", "").Replace(">", "").Replace("'", "").Replace("\"", "").Replace("`", "").Replace("`", "").Trim();
+                            gatewayMessage = gatewayMessage.Replace("<", "").Replace(">", "").Replace("'", "").Replace("\"", "").Replace("`", "").Trim();
                         }
 
                         smsPage = GetSmsPageCount(gatewayMessage);
-
                         ShowActivity(ActivityType.AddTransactionList, $"BAPULL Sent [{mobileNo}]. Response: {gatewayCode} - {gatewayMessage}");
 
                         if (!string.IsNullOrEmpty(gatewayMessage))
@@ -531,12 +474,9 @@ namespace BAFL_Campaign_App
                             InsertMTMessage(msgId, mobileNo, originalMsg, gatewayMessage, telco, shortCode);
                             CreateLog($"[BAPULL SUCCESS] Mobile: {mobileNo} | Code: {gatewayCode} | Queued MT: {gatewayMessage}", "BAPULL_LOG", AppConfig.LogPath);
                         }
-                        else
-                        {
-                            CreateLog($"[BAPULL FAIL] No Resp_Desc found. Raw XML: {soapResult}", "BAPULL_LOG", AppConfig.LogPath);
-                        }
 
                         InsertBapullDbLog(mobileNo, msgId, originalMsg, activity, gatewayCode, gatewayMessage, telco, shortCode, smsPage);
+                        return true;
                     }
                 }
             }
@@ -545,8 +485,9 @@ namespace BAFL_Campaign_App
                 ShowActivity(ActivityType.AddErrirList, string.Format("[SendBapullToGateway Error]: {0}", ex.Message));
                 CreateLog(string.Format("[SendBapullToGateway Error]: {0}", ex.Message), "BAPULL_LOG", AppConfig.LogPath);
 
-                // --- NEW: LOG EXCEPTIONS TO THE DATABASE TOO ---
+                UpdateIncomingError(id, ex.Message);
                 InsertBapullDbLog(mobileNo, msgId, originalMsg, activity, "ERR", $"ERROR: {ex.Message}", telco, shortCode, smsPage);
+                return false;
             }
         }
 
@@ -567,7 +508,6 @@ namespace BAFL_Campaign_App
         {
             try
             {
-                // Using the existing connection string from your AppConfig
                 using (System.Data.SqlClient.SqlConnection conn = new System.Data.SqlClient.SqlConnection(AppConfig.AppConnectionString))
                 {
                     using (System.Data.SqlClient.SqlCommand cmd = new System.Data.SqlClient.SqlCommand("BAFLDB..sp_SendMOMT", conn))
@@ -576,12 +516,12 @@ namespace BAFL_Campaign_App
 
                         cmd.Parameters.AddWithValue("@MsgID", msgId);
                         cmd.Parameters.AddWithValue("@Mobile", mobile);
-                        cmd.Parameters.AddWithValue("@Msg", originalMsg);  // The original message user sent (e.g. "bapull AB 1234")
-                        cmd.Parameters.AddWithValue("@SMS", smsText);      // The message received from the SOAP API
+                        cmd.Parameters.AddWithValue("@Msg", originalMsg);  
+                        cmd.Parameters.AddWithValue("@SMS", smsText);      
                         cmd.Parameters.AddWithValue("@SMSType", "Text");
                         cmd.Parameters.AddWithValue("@ShortCode", shortCode);
                         cmd.Parameters.AddWithValue("@Mask", shortCode);
-                        cmd.Parameters.AddWithValue("@MTTable", "");       // Passing empty as your SP handles this logic via @Telco
+                        cmd.Parameters.AddWithValue("@MTTable", "");       
                         cmd.Parameters.AddWithValue("@Telco", telco);
 
                         conn.Open();
@@ -660,23 +600,11 @@ namespace BAFL_Campaign_App
                 CreateLog($"[DB LOG ERROR]: {ex.Message} | Mobile: {mobileNo}", "BAPULL_LOG", AppConfig.LogPath);
             }
         }
-        private void SendBAFLOtpToGateway(string mobileNo, string otp, string telco, string originalMsg)
+       
+        private bool SendBAFLOtpToGateway(string id, string mobileNo, string otp, string telco, string originalMsg)
         {
             try
             {
-                // IMPORTANT: Replace XXX with your actual IP and Port from the documentation
-                //string soapEndpoint = "http://192.168.186.75:7800/TwoWaySMS/TwoWaySMS.asmx";UAT
-                //        string soapEnvelope = $@"<?xml version=""1.0"" encoding=""utf-8""?>
-                //<soap:Envelope xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" xmlns:xsd=""http://www.w3.org/2001/XMLSchema"" xmlns:soap=""http://schemas.xmlsoap.org/soap/envelope/"">
-                //  <soap:Body>
-                //    <SendOTACBacktoGateway xmlns=""http://tempuri.org/"">
-                //      <Message>{otp}</Message>
-                //      <MobileNo>{mobileNo}</MobileNo>
-                //    </SendOTACBacktoGateway>
-                //  </soap:Body>
-                //</soap:Envelope>";
-
-                //string soapEndpoint = "http://192.168.186.84/TwoWaySMSService/TwoWaySMS.asmx?op=SendOTACBacktoGateway";
                 string soapEndpoint = AppConfig.SendOtacServiceUrl;
                 string soapEnvelope = $@"<?xml version=""1.0"" encoding=""utf-8""?>
                     <soap:Envelope xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" xmlns:xsd=""http://www.w3.org/2001/XMLSchema"" xmlns:soap=""http://schemas.xmlsoap.org/soap/envelope/"">  
@@ -703,14 +631,11 @@ namespace BAFL_Campaign_App
                 {
                     using (System.IO.StreamReader rd = new System.IO.StreamReader(response.GetResponseStream()))
                     {
-                        // Read the full XML response
                         string soapResult = rd.ReadToEnd();
-
                         string responseCode = "Unknown";
                         string responseDesc = "No Description";
                         string responseData = "";
 
-                        // --- NEW: PARSE THE XML TO EXTRACT ONLY WHAT WE NEED ---
                         try
                         {
                             System.Xml.XmlDocument xmlDoc = new System.Xml.XmlDocument();
@@ -730,19 +655,13 @@ namespace BAFL_Campaign_App
                             CreateLog($"[XML Parse Error]: {xmlEx.Message} | Raw: {soapResult}", "BAFL_LOG", AppConfig.LogPath);
                         }
 
-                        // Format a clean message
                         string cleanMessage = $"Code: {responseCode} | Desc: {responseDesc}";
-                        if (!string.IsNullOrEmpty(responseData))
-                        {
-                            cleanMessage += $" | Data: {responseData}";
-                        }
+                        if (!string.IsNullOrEmpty(responseData)) cleanMessage += $" | Data: {responseData}";
 
-                        // 1. SHOW IN UI: Print only the clean message
                         ShowActivity(ActivityType.AddTransactionList, $"BAFL OTP Sent [{mobileNo}]. {cleanMessage}");
-
-                        // 2. LOG TO FILE: Write the clean message instead of the raw XML
                         CreateLog($"[BAFL OTP] Mobile: {mobileNo} | OTP: {otp} | {cleanMessage}", "BAFL_LOG", AppConfig.LogPath);
                         InsertOtpDbLog(mobileNo, telco, originalMsg, responseCode, responseDesc);
+                        return true;
                     }
                 }
             }
@@ -750,7 +669,10 @@ namespace BAFL_Campaign_App
             {
                 ShowActivity(ActivityType.AddErrirList, string.Format("[SendBAFLOtpToGateway Error]: {0}", ex.Message));
                 CreateLog(string.Format("[SendBAFLOtpToGateway Error]: {0}", ex.Message), "BAFL_LOG", AppConfig.LogPath);
+
+                UpdateIncomingError(id, ex.Message);
                 InsertOtpDbLog(mobileNo, telco, originalMsg, "ERR", $"ERROR: {ex.Message}");
+                return false;
             }
         }
 
@@ -1075,8 +997,6 @@ namespace BAFL_Campaign_App
         }
 
         #endregion Activity
-
-
 
     }
 }
